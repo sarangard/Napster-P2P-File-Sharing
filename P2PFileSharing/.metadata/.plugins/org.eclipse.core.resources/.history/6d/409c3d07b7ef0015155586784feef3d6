@@ -1,0 +1,345 @@
+package server;
+
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.net.Socket;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.ListIterator;
+
+/**
+ * Implements a new thread (peer) for each client to communicate with on the Server Side.
+ * Contains the HashMap<peerID, List<filenames>> where the files of each peer are stored.
+ * 
+ * Allows the client to do the following,
+ * 1. Registers files.
+ * 2. Searches for files .
+ * 3. None.
+ * 4. Closes connection.
+ * 
+ * @author Sarang
+ */
+public class Peer implements Runnable 
+{
+	//Client Socket
+	public Socket clientSocket;
+
+	//HashMap to store Key (Filename) and Value (where file is located)
+	public static HashMap<String, ArrayList<String>> peerFilesMap = new HashMap<String, ArrayList<String>>();
+	
+	/*
+	 * Public Constructor
+	 * initializes the Socket
+	 */
+	public Peer(Socket socket) throws IOException
+	{
+		this.clientSocket = socket;	
+	}
+
+	/*
+	 * Server side code
+	 * Connects to the client.
+	 * 
+	 * (non-Javadoc)
+	 * @see java.lang.Runnable#run()
+	 */
+	@Override
+	public void run()
+	{
+		System.out.println("Connected to Client");
+		boolean bool = true;
+
+		//Infinite loop
+		while(bool)
+		{
+			try
+			{
+				String nameOfFile;
+				String peerID;
+				String searchFileName;
+				List<String> peersWithFile = null;
+
+				//for communication over sockets between Client and server
+				DataInputStream fromClientStream = new DataInputStream(clientSocket.getInputStream());
+				DataOutputStream toClientStream = new DataOutputStream(clientSocket.getOutputStream());
+
+				//read the choice selected by Client
+				String clientOption = fromClientStream.readUTF();
+				System.out.println("");
+				System.out.println("Client entered the option: " + clientOption);
+
+				//MENU from Client
+				switch(clientOption)
+				{
+					//Registration of Files
+					case "1":						
+						//read the fileName to be registered and peerID(userInputPort) from Client
+						nameOfFile = fromClientStream.readUTF();	
+						peerID = fromClientStream.readUTF();
+						
+						System.out.println("Registering the File");
+						//call registry to register the file
+						registerFile(peerID, nameOfFile);	
+						System.out.println("File Registered!!!");
+						
+						
+						// To evaluate performance - Uncomment this line and comment the above lines.
+						//evaluateFileRegistryPerformance(peerID);
+						
+						break;
+						
+					//Search
+					case "2":	
+						
+						//get the filename to be searched
+						searchFileName = fromClientStream.readUTF();	
+						System.out.println("Search for file started.");
+						try
+						{
+							//list of peers having the requested file
+							peersWithFile = search(searchFileName);
+							
+							String peersList="";
+							ListIterator<String> iterator = peersWithFile.listIterator();
+							while(iterator.hasNext())
+							{
+								peersList = peersList + iterator.next() + " ";
+							}
+							
+							String sendSearchResults = "The file is available with these Peers: " + peersList;
+							toClientStream.writeUTF(sendSearchResults);
+							toClientStream.flush();
+							System.out.println("Search Finished.");
+	
+						}
+						catch(Exception e)
+						{
+							toClientStream.writeUTF("File has not been registered by any peer.");
+							System.out.println("File has not been registered by any peer.");
+							break;
+						}
+						
+
+						// To evaluate performance - Uncomment these lines and comment the above lines.
+						/*
+						String peerList = evaluateFileSearchPerformance();
+						String sendPeerList = "The file is present with these Peers: " + peerList;
+						toClientStream.writeUTF(sendPeerList);
+						toClientStream.flush();
+						*/
+						
+						break;
+						
+					//Exit
+					case "4":
+						//Close connection between Client and Server.
+						clientSocket.close();
+						System.out.println("Client Dissconnected");
+						
+						//Exit from the while(bool) loop
+						bool = false;	
+
+						break;
+				}
+			}
+			catch(Exception e1)
+			{
+				System.out.println("Client Connection might have been closed.");
+				bool = false;
+				try 
+				{
+					clientSocket.close();		//Closing socket connection					
+					System.gc();				//Call Garbage Collector				
+				}
+				catch (Exception e) 
+				{
+					e.printStackTrace();
+				}
+			}
+		}
+	}
+	
+	/*
+	 *	This method registers the files with the indexing server
+	 */
+	public boolean registerFile(String peerID, String filename) throws IOException
+	{
+		System.out.println("Registering the file - " + filename + " with peer - " + peerID);
+
+		//check if file is already registered, 
+		//if not, register it
+		//if yes, then check if same peer has already registered it. If yes, then ignore else add this peer to list.
+		boolean fileExists = checkFileExistsInMap(filename);
+		if(!fileExists)
+		{
+			addNewFileToMapWithPeer(filename, peerID);
+		}
+		else
+		{
+			ArrayList<String> existingPeerList = getPeerListForFile(filename);
+			Iterator<String> iterator = existingPeerList.listIterator();
+
+			//Checking if peer has already registered this file.
+			while(iterator.hasNext())
+			{
+				String existingPeer = iterator.next();
+
+				if(existingPeer.equals(peerID))
+				{
+					System.out.println("Already Registered !!!");
+					return true;
+				}
+			}
+
+			//add PeerID to existing list of peers
+			existingPeerList.add(peerID);
+			addnewFileToMapWithPeerList(filename, existingPeerList);
+		}
+		
+		return true;
+	}
+
+	/*
+	 * This method is used to search for an already registered file,
+	 * return the list of peers where the file is present
+	 */
+	public List<String> search(String fileName) throws IOException
+	{
+		return getPeerListForFile(fileName);
+	}
+	
+	/*
+	 * Adds a new file to peerFilesMap with given filename and peerList.
+	 */
+	private void addnewFileToMapWithPeerList(String filename, ArrayList<String> peerList)
+	{
+		peerFilesMap.put(filename, peerList);
+	}
+	
+	/*
+	 * Adds a new file to peerFilesMap with given filename and peerID.
+	 */
+	private void addNewFileToMapWithPeer(String filename, String peerID)
+	{
+		ArrayList<String> peerList = new ArrayList<String>();
+		peerList.add(peerID);
+		
+		addnewFileToMapWithPeerList(filename, peerList);
+	}
+	
+	/*
+	 * Returns the list of peers for given filename.
+	 */
+	private ArrayList<String> getPeerListForFile(String filename)
+	{
+		ArrayList<String> existingPeerList = new ArrayList<String>();
+		existingPeerList = peerFilesMap.get(filename);
+		
+		return existingPeerList;
+	}
+	
+	/*
+	 * Checks if the given filename exists in the peerFilesMap
+	 */
+	private boolean checkFileExistsInMap(String filename)
+	{
+		boolean retVal = false;		
+		ArrayList<String> existingPeerList = getPeerListForFile(filename);
+		
+		if(!(existingPeerList == null || existingPeerList.isEmpty()))
+		{
+			retVal = true;
+		}
+		
+		return retVal;
+	}
+	
+	/*
+	 * This method evaluates the performance of registering files by a particular client.
+	 */
+	private void evaluateFileRegistryPerformance(String peerID)
+	{
+		//File location in local machine
+		File dir= new File("D:/PerformanceEvaluation/");
+		
+		//File location in leaflock.cs.ttu.edu
+		//File dir= new File("/home/TTU/sardhapu/AOS-Project1/Test-Files/FileRegistryPerformance/");
+
+		File[] sharedfiles = dir.listFiles();
+		System.out.println("Registering the File(s) ...");
+
+		try
+		{
+			long startTime = System.currentTimeMillis();
+			long endTime;
+			
+			for(int i=0;i<sharedfiles.length;i++)
+			{
+				registerFile(peerID, sharedfiles[i].getName());
+			}
+
+			System.out.println("File(s) Registered!!!");
+
+			endTime = System.currentTimeMillis();
+
+			long elapsedTime = endTime - startTime;
+			System.out.println("Total time to register "+ sharedfiles.length +" files: " + (elapsedTime) + "msec");
+		}
+		catch (IOException e) 
+		{
+			System.out.println("Could not register the file(s) with the peer " + peerID);
+		}
+
+	}
+	
+	/*
+	 * 
+	 */
+	private String evaluateFileSearchPerformance()
+	{
+		String peerList = null;
+		List<String> peersWithFile = null;
+		
+		//File location in local machine
+		File dir= new File("D:/PerformanceEvaluation/");
+		
+		//Files location in leaflock.cs.ttu.edu
+		//File dir= new File("/home/TTU/sardhapu/AOS-Project1/Test-Files/FileSearchPerformance/");
+		
+		File[] fileList = dir.listFiles();
+
+		try
+		{
+			long startTime =System.currentTimeMillis();
+			long endTime;
+
+			for(int i=0;i<fileList.length;i++)
+			{
+				peersWithFile = search(fileList[i].getName());
+				System.out.println("File present with " + peersWithFile);
+			}
+
+			ListIterator<String> iterator = peersWithFile.listIterator();
+			while(iterator.hasNext())
+			{
+				peerList = peerList + iterator.next() + " ";
+			}
+
+			endTime = System.currentTimeMillis();
+
+			long elapsedTime = endTime - startTime;
+			System.out.println("Total time to search files: " + (elapsedTime) + "msec");
+
+		}
+		catch (IOException e) 
+		{
+			System.out.println("Could not search for the files.");
+		}
+		
+		return peerList;
+	}
+}
